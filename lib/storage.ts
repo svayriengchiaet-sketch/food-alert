@@ -1,55 +1,59 @@
-import { FoodItem } from './types';
-import { promises as fs } from 'fs';
-import path from 'path';
+import { AppData, LessonData } from './types';
+import { TOTAL_LESSONS, TOTAL_REVIEWS } from './schedule';
 
-const KV_KEY = 'food-items';
-const LOCAL_DATA_DIR = path.join(process.cwd(), '.data');
-const LOCAL_DATA_FILE = path.join(LOCAL_DATA_DIR, 'items.json');
+const STORAGE_KEY = 'english-learning-v1';
 
-// Check if Upstash Redis is configured
-function isKVConfigured(): boolean {
-  return !!(
-    process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
-  );
+function buildInitialLessons(): LessonData[] {
+  return Array.from({ length: TOTAL_LESSONS }, (_, i) => ({
+    lessonId: i + 1,
+    reviews: Array.from({ length: TOTAL_REVIEWS }, (_, j) => ({
+      reviewNumber: j + 1,
+      scheduledDate: null,
+      completedDate: null,
+    })),
+  }));
 }
 
-async function getRedis() {
-  const { Redis } = await import('@upstash/redis');
-  return new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
+export function initializeAppData(): AppData {
+  return {
+    lessons: buildInitialLessons(),
+    lastCheckedDate: null,
+  };
 }
 
-async function readLocalData(): Promise<FoodItem[]> {
+export function loadAppData(): AppData {
+  if (typeof window === 'undefined') return initializeAppData();
+
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (!stored) {
+    const initial = initializeAppData();
+    saveAppData(initial);
+    return initial;
+  }
+
   try {
-    await fs.mkdir(LOCAL_DATA_DIR, { recursive: true });
-    const data = await fs.readFile(LOCAL_DATA_FILE, 'utf-8');
-    return JSON.parse(data) as FoodItem[];
+    const parsed = JSON.parse(stored) as AppData;
+    // Ensure all 50 lessons are present (handles schema migrations)
+    while (parsed.lessons.length < TOTAL_LESSONS) {
+      const id = parsed.lessons.length + 1;
+      parsed.lessons.push({
+        lessonId: id,
+        reviews: Array.from({ length: TOTAL_REVIEWS }, (_, j) => ({
+          reviewNumber: j + 1,
+          scheduledDate: null,
+          completedDate: null,
+        })),
+      });
+    }
+    return parsed;
   } catch {
-    return [];
+    const initial = initializeAppData();
+    saveAppData(initial);
+    return initial;
   }
 }
 
-async function writeLocalData(items: FoodItem[]): Promise<void> {
-  await fs.mkdir(LOCAL_DATA_DIR, { recursive: true });
-  await fs.writeFile(LOCAL_DATA_FILE, JSON.stringify(items, null, 2));
-}
-
-export async function getItems(): Promise<FoodItem[]> {
-  if (isKVConfigured()) {
-    const redis = await getRedis();
-    const items = await redis.get<FoodItem[]>(KV_KEY);
-    return items || [];
-  }
-  return readLocalData();
-}
-
-export async function saveItems(items: FoodItem[]): Promise<void> {
-  if (isKVConfigured()) {
-    const redis = await getRedis();
-    await redis.set(KV_KEY, items);
-    return;
-  }
-  await writeLocalData(items);
+export function saveAppData(data: AppData): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
